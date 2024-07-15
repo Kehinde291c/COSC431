@@ -1,19 +1,24 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-contract SimpleDAO {
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract KehindeDAO {
     struct Proposal {
         string description;
         uint voteCount;
+        uint endTime;
         bool executed;
     }
 
+    IERC20 public governanceToken;
     address public chairperson;
-    mapping(address => bool) public members;
     Proposal[] public proposals;
+    mapping(address => bool) public members;
+    mapping(uint => mapping(address => bool)) public votes;
 
-    event ProposalCreated(uint proposalId, string description);
-    event Voted(uint proposalId, address voter);
+    event ProposalCreated(uint proposalId, string description, uint endTime);
+    event Voted(uint proposalId, address voter, uint weight);
     event Executed(uint proposalId);
 
     modifier onlyMember() {
@@ -26,27 +31,34 @@ contract SimpleDAO {
         _;
     }
 
-    constructor(address[] memory initialMembers) {
+    constructor(address tokenAddress, address[] memory initialMembers) {
+        governanceToken = IERC20(tokenAddress);
         chairperson = msg.sender;
         for (uint i = 0; i < initialMembers.length; i++) {
             members[initialMembers[i]] = true;
         }
     }
 
-    function createProposal(string memory description) public onlyMember {
-        proposals.push(Proposal({description: description, voteCount: 0, executed: false}));
-        emit ProposalCreated(proposals.length - 1, description);
+    function createProposal(string memory description, uint duration) public onlyMember {
+        uint endTime = block.timestamp + duration;
+        proposals.push(Proposal({description: description, voteCount: 0, endTime: endTime, executed: false}));
+        emit ProposalCreated(proposals.length - 1, description, endTime);
     }
 
     function vote(uint proposalId) public onlyMember {
         Proposal storage proposal = proposals[proposalId];
-        proposal.voteCount++;
-        emit Voted(proposalId, msg.sender);
+        require(block.timestamp < proposal.endTime, "Voting period ended");
+        require(!votes[proposalId][msg.sender], "Already voted");
+
+        uint weight = governanceToken.balanceOf(msg.sender);
+        proposal.voteCount += weight;
+        votes[proposalId][msg.sender] = true;
+        emit Voted(proposalId, msg.sender, weight);
     }
 
     function executeProposal(uint proposalId) public onlyChairperson {
         Proposal storage proposal = proposals[proposalId];
-        require(proposal.voteCount > getTotalMembers() / 2, "Not enough votes");
+        require(block.timestamp >= proposal.endTime, "Voting period not ended");
         require(!proposal.executed, "Already executed");
 
         proposal.executed = true;
@@ -54,13 +66,11 @@ contract SimpleDAO {
         emit Executed(proposalId);
     }
 
-    function getTotalMembers() public view returns (uint) {
-        uint count = 0;
-        for (uint i = 0; i < proposals.length; i++) {
-            if (members[address(i)]) {
-                count++;
-            }
-        }
-        return count;
+    function addMember(address newMember) public onlyChairperson {
+        members[newMember] = true;
+    }
+
+    function removeMember(address member) public onlyChairperson {
+        members[member] = false;
     }
 }
